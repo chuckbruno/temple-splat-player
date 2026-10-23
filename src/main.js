@@ -2,7 +2,7 @@
 // kicking inside a PINOC splat scene, with collision from the scene's splats.
 import {
   Scene, Character, Animation, Environment, Keyboard, ThirdPersonCamera,
-  SceneCollider, buildColliderData, environmentColliderFrame,
+  SceneCollider, buildColliderData, environmentColliderFrame, SplatRelight,
   capsuleForWalker, minStepLimit, SceneColliderDebug,
 } from '@viggle/splat-engine';
 
@@ -144,6 +144,29 @@ character.playAnimation('idle', { loop: true });
 let current = 'idle';
 let oneShot = null; // name of a non-looping clip in progress
 
+// ---- Cast shadow. The scene keeps its baked lighting (strength 0) and only
+// darkens where the character blocks the key light (shadowStrength). The key
+// light matches the photo: a low winter sun behind the camera, slightly left,
+// so shadows fall toward the hall and to the right.
+const SUN = { azimuth: -25, elevation: 32 };
+const relight = SplatRelight.create(scene, {
+  strength: 0,
+  shadowStrength: 0.75,
+  receiveShadows: true,
+  shadowBlurRadius: 2,
+  light: { ...SUN, intensity: 1, shadowType: 'pcf5', shadowDistance: 30, shadowResolution: 2048 },
+});
+// The character only casts: its own colours stay as generated.
+relight.add(character);
+relight.setParams(character, { strength: 0, shadowStrength: 0 });
+// The scene only receives, and only near the courtyard where people walk.
+function relightBounds() {
+  const r = COLLIDER_RADIUS_M;
+  return { min: { x: -r, y: -1, z: -r }, max: { x: r, y: 4, z: r } };
+}
+relight.add(env, { bounds: relightBounds(), castShadows: false });
+let shadowsOn = true;
+
 // ---- Camera and input.
 const camera = new ThirdPersonCamera({
   target: () => ({ x: pos.x, y: pos.y, z: pos.z }),
@@ -175,6 +198,9 @@ function rescale(factor) {
   pos.x *= k; pos.z *= k; spawn.x *= k; spawn.z *= k;
   clearTimeout(rebuildTimer);
   rebuildTimer = setTimeout(() => {
+    // The shadow receiver was voxelized at the old scale; rebuild it too.
+    relight.remove(env);
+    relight.add(env, { bounds: relightBounds(), castShadows: false });
     const next = buildCollider();
     if (!next) return;
     collider = next;
@@ -189,6 +215,10 @@ function rescale(factor) {
 keys.onKeyDown('BracketLeft', () => rescale(1 / 1.05));
 keys.onKeyDown('BracketRight', () => rescale(1.05));
 keys.onKeyDown('Backslash', () => rescale(SCENE_SCALE_DEFAULT / sceneScale));
+keys.onKeyDown('KeyH', () => {
+  shadowsOn = !shadowsOn;
+  relight.enabled = shadowsOn;
+});
 keys.onKeyDown('KeyC', () => {
   if (!colliderDebug) return;
   colliderDebug.mode = colliderDebug.mode === 'off' ? 'top' : colliderDebug.mode === 'top' ? 'all' : 'off';
@@ -258,6 +288,8 @@ scene.app.on('update', (dt) => {
   readout.textContent =
     `场景尺度  ${metresPerUnit.toFixed(3)} m/单位  (探针深度 ${depth?.toFixed(3) ?? '未测到'}, 平整度 ${probe?.flatness?.toFixed(2) ?? '-'}, 地面校正 ×${scaleFix.toFixed(2)})\n` +
     `场景缩放  ×${sceneScale.toFixed(2)}   ([ 缩小  ] 放大  反斜杠键 恢复默认)
+` +
+    `阴影      ${shadowsOn ? '开' : '关'}  (H 切换)
 ` +
     `碰撞体    ${collider ? `体素 ${collider.voxelMetres.toFixed(2)} m${collider.stats.coarsened ? ' (已粗化)' : ''}` : '无'}${colliderDebug ? `  显示 ${colliderDebug.mode}` : ''}\n` +
     `位置      x ${pos.x.toFixed(2)}  y ${pos.y.toFixed(2)}  z ${pos.z.toFixed(2)}   动作 ${current}`;
